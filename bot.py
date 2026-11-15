@@ -95,10 +95,7 @@ async def usdt_cmd(interaction: discord.Interaction):
 @bot.tree.command(name="vouch", description="Post a vouch message for the customer to copy")
 @app_commands.describe(message="The vouch text you want them to copy and paste")
 async def vouch_cmd(interaction: discord.Interaction, message: str):
-    response = (
-        f"**Please copy and paste this vouch:**\n\n"
-        f"```{message}```"
-    )
+    response = f"**Please copy and paste this vouch:**\n\n```{message}```"
     await interaction.response.send_message(response)
 
 @tasks.loop(minutes=2)
@@ -121,4 +118,50 @@ async def check_btc(session):
             txid = tx["txid"]
             if txid in last_seen["btc"]:
                 continue
-            received = sum(
+            received = 0
+            for vout in tx.get("vout", []):
+                if vout.get("scriptpubkey_address") == ADDRESSES["btc"]:
+                    received += vout.get("value", 0)
+            if received > 0:
+                last_seen["btc"].add(txid)
+                status = "Pending" if not tx.get("status", {}).get("confirmed") else "Confirmed"
+                await notify(f"**BTC Payment Detected**\nAmount: `{received / 1e8:.8f} BTC`\nStatus: **{status}**\nTX: `{txid}`")
+
+async def check_ltc(session):
+    url = f"https://api.blockcypher.com/v1/ltc/main/addrs/{ADDRESSES['ltc']}/full?limit=6"
+    async with session.get(url) as resp:
+        if resp.status != 200:
+            return
+        data = await resp.json()
+        for tx in data.get("txs", []):
+            txid = tx["hash"]
+            if txid in last_seen["ltc"]:
+                continue
+            received = 0
+            for out in tx.get("outputs", []):
+                if ADDRESSES["ltc"] in out.get("addresses", []):
+                    received += out.get("value", 0)
+            if received > 0:
+                last_seen["ltc"].add(txid)
+                status = "Confirmed" if tx.get("confirmations", 0) > 0 else "Pending"
+                await notify(f"**LTC Payment Detected**\nAmount: `{received / 1e8:.8f} LTC`\nStatus: **{status}**\nTX: `{txid}`")
+
+async def check_sol(session):
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getSignaturesForAddress",
+        "params": [ADDRESSES["sol"], {"limit": 8}]
+    }
+    async with session.post("https://api.mainnet-beta.solana.com", json=payload) as resp:
+        if resp.status != 200:
+            return
+        data = await resp.json()
+        for item in data.get("result", []):
+            sig = item["signature"]
+            if sig in last_seen["sol"]:
+                continue
+            last_seen["sol"].add(sig)
+            await notify(f"**SOL Activity Detected**\nSignature: `{sig}`\n(Check Solscan for exact amount)")
+
+bot.run(TOKEN)
